@@ -1,0 +1,60 @@
+{
+  "customer_id": 41,
+  "amount": 5000.00,
+  "currency": "USD",
+  "receipt_date": "2026-03-15",
+  "exchange_rate": 5.00,
+  "invoices": [
+    {
+      "id": 101,
+      "customer_id": 41,
+      "value": 1000.00,
+      "currency": "USD",
+      "due_date": "2026-02-10",
+      "issue_date": "2026-01-01",
+      "status": "OPEN"
+    },
+    {
+      "id": 102,
+      "customer_id": 41,
+      "value": 10000.00,
+      "currency": "BRL",
+      "original_value": 10000.00,
+      "original_currency": "BRL",
+      "exchange_rate": 5.00,
+      "due_date": "2026-02-15",
+      "issue_date": "2026-01-05",
+      "status": "OPEN"
+    },
+    {
+      "id": 103,
+      "customer_id": 41,
+      "value": 1600.00,
+      "currency": "EUR",
+      "original_value": 1600.00,
+      "original_currency": "EUR",
+      "exchange_rate": 0.80,
+      "due_date": "2026-03-01",
+      "issue_date": "2026-01-15",
+      "status": "OPEN"
+    },
+    {
+      "id": 104,
+      "customer_id": 41,
+      "value": 4000.00,
+      "currency": "USD",
+      "due_date": "2026-04-10",
+      "issue_date": "2026-02-01",
+      "status": "OPEN"
+    },
+    {
+      "id": 105,
+      "customer_id": 41,
+      "value": 3000.00,
+      "currency": "USD",
+      "due_date": "2026-04-20",
+      "issue_date": "2026-02-10",
+      "status": "OPEN"
+    }
+  ]
+}

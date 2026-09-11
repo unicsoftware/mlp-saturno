@@ -15,15 +15,15 @@
 **License**: MIT
 
 [Overview](#-overview) •
+[External Integration & Deterministic API](#-pure-deterministic-mathematical-api--external-system-integration) •
 [Architecture & Dual Engines](#-architecture--the-two-stage-dual-engine-concept) •
 [Multi-Currency & USD Settlement](#-multi-currency-support--usd-settlement) •
+[Real-Time & Interactive Notebooks](#-real-time-streaming--interactive-notebooks) •
 [Dataset Schemas & Fields](#-dataset-schemas--field-specifications) •
 [Mathematical Engine (`_math`)](#-how-to-run-the-mathematical-engine-_math) •
 [MLP Ranking Engine (`_mlp`)](#-how-to-run-the-deep-learning-mlp-engine-_mlp) •
 [Directory Layout](#-clean-directory-layout) •
-[Installation & Quickstart](#-installation--quickstart) •
-[Jupyter Notebook](#-jupyter-notebook-20-sections) •
-[Documentation](#-technical-documentation)
+[Installation & Quickstart](#-installation--quickstart)
 
 </div>
 
@@ -34,8 +34,9 @@
 In enterprise Accounts Receivable (A/R) reconciliation, corporate customers frequently submit lump-sum bank payments to clear multiple open invoices. Determining **which exact combination of open invoices corresponds to the received amount (`amount`)** is a combinatorial optimization challenge with direct impact on cash application speed, credit limits, and accounting integrity.
 
 **MLP Saturno** solves this challenge through a strict, two-stage architectural separation:
-1. **Deterministic Mathematical Correctness (`_math/`)**: Exact Subset Sum solvers working strictly with integer arithmetic in **cents (`int`)**. Guarantees that no suggested combination violates accounting equality:
+1. **Deterministic Mathematical Correctness (`_math/` & `find_deterministic_matches`)**: Exact Subset Sum solvers working strictly with integer arithmetic in **cents (`int`)**. Guarantees that no suggested combination violates accounting equality:
    $$\sum_{i \in \text{Subset}} \text{value}_i = \text{amount}$$
+   Can be called standalone by **any external platform, ERP, or microservice** without ML dependencies.
 2. **Machine Learning / Deep Learning Ranking (`_mlp/`)**: When multiple mathematically exact combinations exist (e.g., Combination A and Combination B both sum to exactly $10,000.00), a **PyTorch Multi-Layer Perceptron (MLP)** neural network scores each combination based on customer historical payment preferences (e.g., clearing overdue invoices first, clearing highest face values, or clearing oldest invoices) and outputs ranked suggestions with natural language explanations.
 
 ---
@@ -51,6 +52,131 @@ The system natively supports multi-currency invoices (e.g., `BRL`, `EUR`, `USD`)
    - Invoices maintain full traceability: each candidate invoice retains its `original_currency`, `original_value`, and applied `exchange_rate` alongside the converted `value` in USD.
 3. **Receipt Date & Dollar Quotation Tracking**:
    - The received amount payload returns the **Settlement / Receipt Date** (`receipt_date` / `data_recebimento`) and the **Dollar Quotation** (`exchange_rate` / `cotacao`) applied on that date.
+
+---
+
+## 🌐 Pure Deterministic Mathematical API & External System Integration
+
+If your use-case requires **only the deterministic mathematical engine** (e.g. an external ERP, Web Platform, Payment Gateway, or Microservice written in Python, Node.js, Java, Go, or .NET), you can invoke the exact solver directly **without any machine learning, PyTorch, or historical data requirements**.
+
+### Key Guarantees for External Consumers:
+1. **$0.00$ Residual Balance**: Exact mathematical subset sum in integer cents.
+2. **Multi-Currency Normalization**: Invoices in BRL, EUR, USD are converted to USD using the quotation on the receipt date.
+3. **Sub-Millisecond Execution**: Average latency $< 3\text{ ms}$ for typical invoice books.
+4. **Independent Accounting Audit**: Rejects duplicate IDs, closed invoices, and cross-customer pollution.
+
+### 1. Python Programmatic Usage
+```python
+from src.pipeline import find_deterministic_matches
+
+# Input payload (e.g. from your web platform or ERP)
+invoices = [
+    {"id": 101, "customer_id": 41, "value": 1000.00, "currency": "USD", "due_date": "2026-02-10", "status": "OPEN"},
+    {"id": 102, "customer_id": 41, "value": 10000.00, "currency": "BRL", "exchange_rate": 5.0, "status": "OPEN"},  # = $2,000 USD
+    {"id": 103, "customer_id": 41, "value": 1600.00, "currency": "EUR", "exchange_rate": 0.8, "status": "OPEN"},   # = $2,000 USD
+    {"id": 104, "customer_id": 41, "value": 4000.00, "currency": "USD", "status": "OPEN"}
+]
+
+# Find exact combinations for $5,000.00 USD
+result = find_deterministic_matches(
+    amount=5000.00,
+    invoices=invoices,
+    customer_id=41,
+    currency="USD",
+    ranking_strategy="fewest_invoices"
+)
+
+print(f"Status: {result['status']}")  # 'EXACT_MATCH'
+print(f"Total Combinations Found: {result['combinations_count']}")
+for combo in result["combinations"]:
+    print(f"Rank #{combo['rank']}: Invoice IDs {combo['invoice_ids']} | Total: ${combo['total']:,.2f} USD")
+```
+
+### 2. Standalone CLI Usage (JSON & CSV)
+```bash
+# Ingest directly from a JSON payload file:
+python3 _math/run_math_solver.py --input data/sample/sample_payload.json
+
+# Ingest directly from an exported CSV spreadsheet:
+python3 _math/run_math_solver.py --csv data/sample/sample_invoices.csv --amount 5500.00 --customer 42
+```
+
+### 3. REST API / Microservice Integration (FastAPI Blueprint)
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
+from src.pipeline import find_deterministic_matches
+
+app = FastAPI(title="Deterministic Invoice Matcher API")
+
+class MatchRequest(BaseModel):
+    customer_id: Optional[int] = None
+    amount: float
+    currency: str = "USD"
+    exchange_rate: Optional[float] = 1.0
+    receipt_date: Optional[str] = None
+    ranking_strategy: str = "fewest_invoices"
+    invoices: List[Dict[str, Any]]
+
+@app.post("/api/v1/reconcile")
+def reconcile_invoices(req: MatchRequest):
+    result = find_deterministic_matches(
+        amount=req.amount,
+        invoices=req.invoices,
+        customer_id=req.customer_id,
+        currency=req.currency,
+        exchange_rate=req.exchange_rate,
+        receipt_date=req.receipt_date,
+        ranking_strategy=req.ranking_strategy
+    )
+    return result
+```
+
+#### JSON Response Schema:
+```json
+{
+  "status": "EXACT_MATCH",
+  "customer_id": 41,
+  "amount": 5000.0,
+  "currency": "USD",
+  "receipt_date": "2026-03-15",
+  "exchange_rate": 5.0,
+  "combinations_count": 4,
+  "combinations": [
+    {
+      "rank": 1,
+      "invoice_ids": [104, 101],
+      "invoice_values": [4000.0, 1000.0],
+      "number_of_invoices": 2,
+      "total": 5000.0,
+      "currency": "USD",
+      "remaining": 0.0,
+      "reasons": [
+        "Exact match sum ($5,000.00 USD) with $0.00 residual balance.",
+        "Reconciles 2 invoice(s)."
+      ],
+      "invoices_details": [...]
+    }
+  ],
+  "solver_used": "BacktrackingSolver"
+}
+```
+
+---
+
+## 📓 Real-Time Streaming & Interactive Notebooks
+
+| Notebook | Location | Description |
+| :--- | :--- | :--- |
+| **Real-Time `ainvoices` Validator** | [`notebooks/realtime_ainvoice_validation.ipynb`](./notebooks/realtime_ainvoice_validation.ipynb) | **Interactive drop-in validator for JSON and CSV files**, real-time streaming simulator, latency profiling (P50/P95/P99), and pre-rendered outputs. |
+| **Complete 20-Section ML Model** | [`notebooks/ai_invoice_payment_suggestion.ipynb`](./notebooks/ai_invoice_payment_suggestion.ipynb) | Comprehensive research notebook: 4 exact solvers, feature engineering, baselines vs PyTorch MLP, and explainability. |
+
+### How to Use the Real-Time Validation Notebook:
+1. Open [`notebooks/realtime_ainvoice_validation.ipynb`](./notebooks/realtime_ainvoice_validation.ipynb) in Jupyter or VSCode. All cell outputs and tables are **already pre-rendered**.
+2. Run **Section 05** (`validate_from_json`) to pass your own JSON file or JSON payload.
+3. Run **Section 06** (`validate_from_csv`) to load your invoices CSV spreadsheet and export matching results to `reconciliation_results.csv`.
+4. Use **Section 07** to paste custom raw JSON strings for immediate live validation.
 
 ---
 
@@ -342,114 +468,214 @@ When `FeatureExtractor.create_training_dataset()` is executed, it computes a 28-
 
 ## 🔢 How to Run the Mathematical Engine (`_math/`)
 
-The mathematical engine solves the Subset Sum problem with 100% exact integer arithmetic. It has **no machine learning dependencies**.
+The mathematical engine solves the exact Subset Sum problem with 100% integer arithmetic precision. It has **no machine learning dependencies** and operates strictly on integer cents (`int`), guaranteeing $0.00$ residual balance.
 
-### Option A: Run via CLI Script
-```bash
-python3 _math/run_math_solver.py
-```
+---
 
-**What it does:**
-1. Loads candidate invoices from `data/sample/my_invoices.json`.
-2. Filters out foreign customers and invoices with value $> \text{amount}$.
-3. Converts values to integer cents.
-4. Executes the deterministic `BacktrackingSolver` with suffix-sum pruning.
-5. Prints every exact mathematical match found.
+### 1. Function Parameter Specification: `find_deterministic_matches`
 
-**Sample CLI Output:**
-```text
-================================================================================
-🔢 PURE MATHEMATICAL ENGINE - EXACT SUBSET SUM SOLVER
-================================================================================
-Customer ID: 41
-Received Amount: $10,000.00 (1000000 cents)
-Loaded Candidate Invoices: 6 items
+This is the core Python function located in [`src.pipeline`](./src/pipeline/inference.py) and called by [`_math/run_math_solver.py`](./_math/run_math_solver.py).
 
-Executing Deterministic Solver: BacktrackingSolver
-================================================================================
-Result: Status = EXACT_MATCH | Combinations Found: 4
-
-✓ Combination #1: IDs [1004, 1005] | Values: [5000.0, 5000.0] | Sum: $10,000.00 | Remaining: $0.00
-✓ Combination #2: IDs [1004, 1002, 1006] | Values: [5000.0, 3500.0, 1500.0] | Sum: $10,000.00 | Remaining: $0.00
-✓ Combination #3: IDs [1005, 1002, 1006] | Values: [5000.0, 3500.0, 1500.0] | Sum: $10,000.00 | Remaining: $0.00
-✓ Combination #4: IDs [1003, 1002, 1001] | Values: [4500.0, 3500.0, 2000.0] | Sum: $10,000.00 | Remaining: $0.00
-================================================================================
-```
-
-### Option B: Run Algorithmic Benchmark
-```bash
-python3 _math/benchmark_solvers.py
-```
-Compares latency (ms) across **Brute Force**, **Backtracking**, **Dynamic Programming**, and **Branch & Bound** across $N = 5, 10, 20, 50, 100$ invoices.
-
-### Option C: Use Directly in Python
 ```python
-from src.solvers.solver_factory import SolverFactory
-from src.data.schemas import Invoice, to_cents
+from src.pipeline import find_deterministic_matches
 
-invoices = [
-    Invoice(id=101, customer_id=41, value=4000.00, due_date="2026-03-01", issue_date="2026-01-01"),
-    Invoice(id=102, customer_id=41, value=6000.00, due_date="2026-03-10", issue_date="2026-01-05"),
-]
-amount_cents = to_cents(10000.00)
+result = find_deterministic_matches(
+    amount=5000.00,
+    invoices=invoices_list,
+    customer_id=41,
+    currency="USD",
+    exchange_rate=5.00,
+    receipt_date="2026-03-15",
+    solver_name="auto",
+    max_combinations=50,
+    ranking_strategy="fewest_invoices"
+)
+```
 
-solver = SolverFactory.get_solver(invoices=invoices)
-subsets = solver.find_combinations(invoices=invoices, target_cents=amount_cents)
+#### Detailed Input Parameters Table:
 
-for s in subsets:
-    print(f"Matched Invoice IDs: {[inv.id for inv in s]}")
+| Parameter | Type | Required? | Default | Description |
+| :--- | :--- | :---: | :---: | :--- |
+| `amount` | `float` | **Yes** | — | Total received settlement amount (in `currency` or converted to USD). |
+| `invoices` | `List[Dict[str, Any]]` | **Yes** | — | List of candidate invoice dictionaries. Each item must contain at least `id` and `value` (or `gross_amount`). Supports multi-currency fields (`currency`, `exchange_rate`, `original_value`, `due_date`, `issue_date`, `status`, `customer_id`). |
+| `customer_id` | `Optional[int]` | Optional | `None` | Customer identifier. If provided, filters candidate invoices to match `customer_id`. If `None`, evaluates all open candidate invoices in the payload. |
+| `currency` | `str` | Optional | `"USD"` | Currency of the received payment (`"USD"`, `"BRL"`, `"EUR"`). |
+| `exchange_rate` | `Optional[float]` | Optional | `1.0` | Dollar exchange rate quotation (e.g. `5.00` BRL per USD) on the `receipt_date`. |
+| `exchange_rates`| `Optional[Dict[str, float]]` | Optional | `None` | Mapping of currency codes to exchange rates against USD (e.g. `{"BRL": 5.0, "EUR": 0.8}`). |
+| `receipt_date` | `Optional[str]` | Optional | Today | Settlement receipt date (`"YYYY-MM-DD"`). Used for overdue days calculation. |
+| `solver_name` | `str` | Optional | `"auto"` | Exact Subset Sum algorithm: `"auto"` (chooses best based on $N$), `"branch_and_bound"`, `"backtracking"`, `"dynamic_programming"`, or `"brute_force"`. |
+| `max_combinations`| `int` | Optional | `50` | Maximum number of exact combinations to find before stopping. |
+| `ranking_strategy`| `str` | Optional | `"fewest_invoices"` | Deterministic ordering: `"fewest_invoices"` (smallest subset), `"overdue_first"` (clears delinquent items first), `"highest_value_first"` (largest face values), `"oldest_first"` (oldest issuance date), or `"none"`. |
+
+---
+
+### 2. CLI Script Parameters: `_math/run_math_solver.py`
+
+Run the mathematical solver directly from the terminal with any custom JSON payload or CSV spreadsheet.
+
+```bash
+# Option A: Run with a JSON payload file
+python3 _math/run_math_solver.py --input data/sample/sample_payload.json
+
+# Option B: Run with an exported CSV spreadsheet of invoices
+python3 _math/run_math_solver.py --csv data/sample/sample_invoices.csv --amount 5500.00 --customer 42 --currency USD
+
+# Option C: Save results to an output JSON file
+python3 _math/run_math_solver.py --input data/sample/sample_payload.json --output results.json
+```
+
+#### Complete CLI Flags:
+
+| Flag | Short | Type | Default | Description |
+| :--- | :---: | :---: | :---: | :--- |
+| `--input` | `-i` | `str` | `None` | Path to JSON payload file containing `amount`, `customer_id`, and `invoices` array. |
+| `--csv` | — | `str` | `None` | Path to CSV spreadsheet of candidate invoices. |
+| `--amount` | `-a` | `float` | `None` | Received payment amount (required if using `--csv`). |
+| `--customer` | `-c` | `int` | `None` | Customer ID to filter invoices (optional). |
+| `--currency` | — | `str` | `"USD"` | Currency of payment (`"USD"`, `"BRL"`, `"EUR"`). |
+| `--exchange-rate`| `-fx` | `float` | `None` | Dollar exchange rate quotation on settlement date. |
+| `--output` | `-o` | `str` | `None` | Path to save output JSON with matched combinations. |
+
+---
+
+### 3. How to Pass Custom Data Files to Validate (JSON & CSV)
+
+#### A. Ingesting a Custom JSON File:
+```python
+import json
+from src.pipeline import find_deterministic_matches
+
+# 1. Load your JSON file
+with open("data/sample/sample_payload.json", "r", encoding="utf-8") as f:
+    payload = json.load(f)
+
+# 2. Run solver
+result = find_deterministic_matches(
+    amount=payload["amount"],
+    invoices=payload["invoices"],
+    customer_id=payload.get("customer_id"),
+    currency=payload.get("currency", "USD"),
+    exchange_rate=payload.get("exchange_rate", 1.0),
+    receipt_date=payload.get("receipt_date")
+)
+
+print(f"Status: {result['status']} | Matches: {result['combinations_count']}")
+for combo in result["combinations"]:
+    print(f"  • Rank #{combo['rank']}: IDs {combo['invoice_ids']} | Total: ${combo['total']:,.2f}")
+```
+
+#### B. Ingesting a Custom CSV File:
+```python
+from src.data.loaders import UniversalDataLoader
+from src.pipeline import find_deterministic_matches
+
+# 1. Load invoices from CSV (auto-normalizes columns like invoice_id, gross_amount, dt_vencimento)
+invoices = UniversalDataLoader.load_invoices_from_csv("data/sample/sample_invoices.csv")
+
+# 2. Reconcile against a payment of $5,500.00 USD for customer 42
+result = find_deterministic_matches(
+    amount=5500.00,
+    invoices=invoices,
+    customer_id=42,
+    currency="USD",
+    ranking_strategy="fewest_invoices"
+)
 ```
 
 ---
 
 ## 🧠 How to Run the Deep Learning MLP Engine (`_mlp/`)
 
-The MLP engine scores and ranks the mathematically valid combinations based on learned customer habits.
+The MLP engine scores and ranks the mathematically valid combinations based on learned customer habits (e.g. clearing overdue invoices first vs largest face value).
 
-### Step 1: Extract the 28-Feature Dataset
+---
+
+### 1. Function Parameter Specification: `suggest_invoice_payments`
+
+This is the main end-to-end pipeline function located in [`src.pipeline.inference`](./src/pipeline/inference.py).
+
+```python
+from src.pipeline.inference import suggest_invoice_payments
+
+response = suggest_invoice_payments(
+    customer_id=41,
+    amount=10000.00,
+    invoices=invoices_list,
+    model=pytorch_model,
+    payment_history=history_list,
+    solver_name="auto",
+    max_combinations=50,
+    min_history_events=3,
+    receipt_date="2026-03-15",
+    currency="USD",
+    exchange_rate=5.00
+)
+```
+
+#### Detailed Input Parameters Table:
+
+| Parameter | Type | Required? | Default | Description |
+| :--- | :--- | :---: | :---: | :--- |
+| `customer_id` | `int` | **Yes** | — | Unique customer identifier. |
+| `amount` | `float` | **Yes** | — | Received settlement amount (standardized in USD). |
+| `invoices` | `List[Dict[str, Any]]` | **Yes** | — | List of candidate open invoices. |
+| `model` | `Optional[Any]` | Optional | `None` | Trained PyTorch model (`DeepLearningRankingModel`) or baseline model. If `None`, triggers deterministic fallback rules. |
+| `payment_history` | `Optional[List[Dict[str, Any]]]` | Optional | `None` | Customer historical payment settlement records for feature extraction. |
+| `solver_name` | `str` | Optional | `"auto"` | Algorithm for Subset Sum (`"auto"`, `"branch_and_bound"`, `"backtracking"`). |
+| `max_combinations`| `int` | Optional | `50` | Maximum candidate subsets to collect before ranking. |
+| `min_history_events`| `int` | Optional | `3` | Threshold of past payments required to activate ML. If customer has $<3$ events, uses deterministic fallback. |
+| `receipt_date` | `Optional[str]` | Optional | Today | Payment receipt date (`"YYYY-MM-DD"`). |
+| `currency` | `str` | Optional | `"USD"` | Currency of payment (`"USD"`, `"BRL"`, `"EUR"`). |
+| `exchange_rate` | `Optional[float]` | Optional | `1.0` | Exchange rate quotation on the receipt date. |
+| `exchange_rates`| `Optional[Dict[str, float]]` | Optional | `None` | Dictionary of exchange rate quotations per currency. |
+| `reference_date`| `Optional[str]` | Optional | `receipt_date` | Baseline reference date for delinquency feature extraction. |
+
+---
+
+### 2. CLI Script Parameters: `_mlp/run_inference.py`
+
+Execute the full integrated two-stage pipeline (Math + PyTorch MLP Ranking) from the command line:
+
 ```bash
+# Run with a JSON payload file:
+python3 _mlp/run_inference.py --input data/sample/sample_payload.json --history data/payment_history.json
+
+# Run with a CSV spreadsheet of invoices:
+python3 _mlp/run_inference.py --csv data/sample/sample_invoices.csv --amount 5500.00 --customer 42
+
+# Save ranked predictions to JSON:
+python3 _mlp/run_inference.py --input data/sample/sample_payload.json --output mlp_ranked_output.json
+```
+
+#### Complete CLI Flags:
+
+| Flag | Short | Type | Default | Description |
+| :--- | :---: | :---: | :---: | :--- |
+| `--input` | `-i` | `str` | `None` | Path to JSON payload file (invoices, amount, customer_id, currency). |
+| `--csv` | — | `str` | `None` | Path to CSV spreadsheet of candidate invoices. |
+| `--amount` | `-a` | `float` | `None` | Received payment amount. |
+| `--customer` | `-c` | `int` | `None` | Customer identifier. |
+| `--currency` | — | `str` | `"USD"` | Payment currency (`"USD"`, `"BRL"`, `"EUR"`). |
+| `--exchange-rate`| `-fx` | `float` | `None` | Dollar exchange rate quotation on receipt date. |
+| `--history` | — | `str` | `data/payment_history.json` | Path to customer past settlements JSON file. |
+| `--receipt-date`| — | `str` | `None` | Payment receipt date (`"YYYY-MM-DD"`). |
+| `--solver` | — | `str` | `"auto"` | Solver algorithm (`"auto"`, `"branch_and_bound"`, `"backtracking"`). |
+| `--max-combos` | — | `int` | `50` | Max combinations to return. |
+| `--output` | `-o` | `str` | `None` | Path to save output JSON. |
+
+---
+
+### 3. Step-by-Step Feature Extraction & Training Workflow
+
+```bash
+# Step 1: Extract 28 Features from historical payments dataset
 python3 _mlp/generate_features.py
-```
-Reads `data/payment_history.json`, calculates 28 numerical features for each candidate subset, and exports `data/training_features_dataset.csv`.
 
-### Step 2: Train the PyTorch MLP Neural Network
-```bash
+# Step 2: Train PyTorch MLP Neural Network and save weights to saved_models/
 python3 _mlp/train_mlp.py
-```
-Trains the neural network using binary cross-entropy, evaluates Top-1 and Top-3 accuracy on the validation set, and persists model weights into `saved_models/pytorch_mlp_weights.pt` and `saved_models/pytorch_scaler.joblib`.
 
-### Step 3: Run Full Two-Stage Inference (Math + MLP Ranking)
-```bash
-python3 _mlp/run_inference.py
-```
-
-**Sample Integrated Output:**
-```text
-================================================================================
-🎯 INTEGRATED INFERENCE ENGINE (MATH SOLVER + MLP RANKING)
-================================================================================
-Customer ID: 41
-Received Amount: $10,000.00
-Input Open Invoices: 6 items
-
-Running Two-Stage Pipeline...
-Status: EXACT_MATCH | Total Mathematical Subsets: 4
-
-🏆 [Rank #1] Probability Score: 0.9500
-   Invoices: [1004, 1005] | Face Values: [5000.0, 5000.0]
-   Sum: $10,000.00 | Remainder: $0.00 | Count: 2 invoices
-   Explanations:
-     • The combination matches the exact received amount with zero remaining balance (exact match).
-     • Customer historically prioritizes highest value invoices (largest in set: $5,000.00).
-     • Efficient reconciliation using concise subset (2 invoices).
-
-🏆 [Rank #2] Probability Score: 0.5765
-   Invoices: [1004, 1002, 1006] | Face Values: [5000.0, 3500.0, 1500.0]
-   Sum: $10,000.00 | Remainder: $0.00 | Count: 3 invoices
-   Explanations:
-     • Contains 1 overdue invoice(s) with an average delay of 13 days.
-     • Customer payment history indicates strong preference for clearing overdue invoices first.
-================================================================================
+# Step 3: Run end-to-end inference
+python3 _mlp/run_inference.py --input data/sample/sample_payload.json
 ```
 
 ---

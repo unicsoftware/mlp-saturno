@@ -6,6 +6,7 @@ License: MIT
 """
 
 from typing import List, Dict, Any, Optional
+from datetime import datetime
 import pandas as pd
 import numpy as np
 
@@ -24,13 +25,13 @@ from src.explainability.explainer import SuggestionExplainer
 
 def validate_combination_integrity(
     combination: List[Dict[str, Any]],
-    expected_customer_id: int,
+    expected_customer_id: Optional[int],
     expected_amount_cents: int
 ) -> bool:
     """
     Independent accounting verification prior to presenting combinations.
     Guarantees:
-    1. Correct customer_id on all invoices;
+    1. Correct customer_id on all invoices (if customer_id specified);
     2. Zero duplicate invoices;
     3. All invoices in 'OPEN' status;
     4. Exact integer cents sum == expected_amount_cents;
@@ -48,7 +49,7 @@ def validate_combination_integrity(
             return False
         seen_ids.add(inv_id)
 
-        if inv.get("customer_id") != expected_customer_id:
+        if expected_customer_id is not None and inv.get("customer_id") != expected_customer_id:
             return False
 
         if inv.get("status", "OPEN").upper() != "OPEN":
@@ -60,6 +61,248 @@ def validate_combination_integrity(
         total_cents += val_cents
 
     return total_cents == expected_amount_cents
+
+
+def find_deterministic_matches(
+    amount: float,
+    invoices: List[Dict[str, Any]],
+    customer_id: Optional[int] = None,
+    currency: str = "USD",
+    exchange_rate: Optional[float] = None,
+    exchange_rates: Optional[Dict[str, float]] = None,
+    receipt_date: Optional[str] = None,
+    solver_name: str = "auto",
+    max_combinations: int = 50,
+    ranking_strategy: str = "fewest_invoices",
+    **kwargs: Any
+) -> Dict[str, Any]:
+    """
+    Pure deterministic mathematical matching entry point for external platforms & microservices.
+    Requires NO machine learning, neural networks, or historical data.
+
+    Args:
+        amount: Total received monetary amount (in USD or foreign currency converted to USD).
+        invoices: List of candidate invoices (can be in USD, BRL, EUR, etc.).
+        customer_id: Optional customer identifier to filter invoices. If None, considers all open invoices.
+        currency: Currency of the received payment (default 'USD').
+        exchange_rate: Dollar exchange rate quotation on the receipt date.
+        exchange_rates: Optional dictionary mapping currency codes to exchange rates.
+        receipt_date: Settlement / payment receipt date (YYYY-MM-DD).
+        solver_name: Algorithm ('auto', 'branch_and_bound', 'backtracking', 'dynamic_programming').
+        max_combinations: Maximum number of exact combinations to find (default 50).
+        ranking_strategy: Deterministic ordering strategy ('fewest_invoices', 'overdue_first', 'highest_value_first', 'oldest_first', 'none').
+
+    Returns:
+        Structured dictionary with status, amount (USD), currency ('USD'), receipt_date,
+        exchange_rate, combinations_count, and ranked combinations with full invoice details.
+    """
+    receipt_date = receipt_date or kwargs.get("payment_date") or kwargs.get("data_recebimento") or datetime.now().strftime("%Y-%m-%d")
+    exchange_rate = exchange_rate or kwargs.get("cotacao") or kwargs.get("fx_rate")
+
+    curr_upper = (currency or "USD").upper()
+    if curr_upper != "USD":
+        fx = exchange_rate or (exchange_rates.get(curr_upper) if exchange_rates else None) or 1.0
+        if fx <= 0:
+            fx = 1.0
+        amount_usd = round(amount / fx, 2)
+    else:
+        amount_usd = round(amount, 2)
+
+    if amount_usd <= 0 or not invoices:
+        return {
+            "status": "NO_EXACT_MATCH",
+            "customer_id": customer_id,
+            "amount": amount_usd,
+            "currency": "USD",
+            "receipt_date": receipt_date,
+            "exchange_rate": exchange_rate,
+            "combinations_count": 0,
+            "combinations": [],
+            "solver_used": "None"
+        }
+
+    amount_cents = to_cents(amount_usd)
+
+    # 1. Filter, sanitize, and convert invoices to USD
+    valid_invoices = []
+    seen_ids = set()
+    for inv in invoices:
+        inv_id = inv.get("id")
+        if inv_id is None or inv_id in seen_ids:
+            continue
+        seen_ids.add(inv_id)
+
+        if customer_id is not None and inv.get("customer_id") != customer_id:
+            continue
+
+        if str(inv.get("status", "OPEN")).upper() != "OPEN":
+            continue
+
+        inv_curr = str(inv.get("currency") or inv.get("original_currency") or "USD").upper()
+        inv_orig_val = float(inv.get("original_value") if inv.get("original_value") is not None else inv.get("value", 0.0))
+
+        inv_rate = float(
+            inv.get("exchange_rate")
+            or inv.get("cotacao")
+            or (exchange_rates.get(inv_curr) if exchange_rates else None)
+            or (exchange_rate if inv_curr != "USD" else 1.0)
+            or 1.0
+        )
+        if inv_rate <= 0:
+            inv_rate = 1.0
+
+        if inv_curr != "USD":
+            if "value" in inv and inv.get("original_value") is not None and inv["value"] != inv_orig_val:
+                val_usd = round(float(inv["value"]), 2)
+            else:
+                val_usd = round(inv_orig_val / inv_rate, 2)
+        else:
+            val_usd = round(float(inv.get("value", inv_orig_val)), 2)
+
+        val_cents = to_cents(val_usd)
+        if 0 < val_cents <= amount_cents:
+            valid_invoices.append({
+                "id": inv_id,
+                "customer_id": inv.get("customer_id", customer_id),
+                "value": val_usd,
+                "currency": "USD",
+                "original_value": inv_orig_val,
+                "original_currency": inv_curr,
+                "exchange_rate": round(inv_rate, 4),
+                "due_date": str(inv.get("due_date", "2026-03-01")),
+                "issue_date": str(inv.get("issue_date", "2026-01-01")),
+                "status": "OPEN"
+            })
+
+    total_avail_cents = sum(to_cents(inv["value"]) for inv in valid_invoices)
+    if total_avail_cents < amount_cents or not valid_invoices:
+        return {
+            "status": "NO_EXACT_MATCH",
+            "customer_id": customer_id,
+            "amount": amount_usd,
+            "currency": "USD",
+            "receipt_date": receipt_date,
+            "exchange_rate": exchange_rate,
+            "combinations_count": 0,
+            "combinations": [],
+            "solver_used": "None"
+        }
+
+    # 2. Execute exact subset sum solver
+    solver = get_solver(
+        method=solver_name,
+        max_combinations=max_combinations,
+        n_invoices=len(valid_invoices)
+    )
+    raw_combinations = solver.solve(valid_invoices, amount_cents)
+
+    if not raw_combinations:
+        return {
+            "status": "NO_EXACT_MATCH",
+            "customer_id": customer_id,
+            "amount": amount_usd,
+            "currency": "USD",
+            "receipt_date": receipt_date,
+            "exchange_rate": exchange_rate,
+            "combinations_count": 0,
+            "combinations": [],
+            "solver_used": solver.__class__.__name__
+        }
+
+    # 3. Independent audit & deterministic ranking
+    audited_combos = []
+    ref_dt = datetime.strptime(receipt_date, "%Y-%m-%d") if receipt_date else datetime.now()
+
+    for combo in raw_combinations:
+        if not validate_combination_integrity(combo, customer_id, amount_cents):
+            continue
+
+        ids = [inv["id"] for inv in combo]
+        values = [round(float(inv["value"]), 2) for inv in combo]
+        total_comb = round(sum(values), 2)
+
+        # Compute deterministic ranking keys
+        overdue_days_list = []
+        for inv in combo:
+            try:
+                due_d = datetime.strptime(str(inv.get("due_date", receipt_date)), "%Y-%m-%d")
+                delay = (ref_dt - due_d).days
+                if delay > 0:
+                    overdue_days_list.append(delay)
+            except Exception:
+                pass
+
+        overdue_count = len(overdue_days_list)
+        avg_delay = (sum(overdue_days_list) / overdue_count) if overdue_count > 0 else 0
+        max_val = max(values) if values else 0.0
+
+        # Build natural language reasons
+        reasons = [
+            f"Exact match sum (${total_comb:,.2f} USD) with $0.00 residual balance.",
+            f"Reconciles {len(combo)} invoice(s)."
+        ]
+        if overdue_count > 0:
+            reasons.append(f"Clears {overdue_count} overdue invoice(s) (avg delay {avg_delay:.0f} days).")
+
+        invoices_details = [
+            {
+                "id": inv["id"],
+                "customer_id": inv.get("customer_id"),
+                "value": inv["value"],
+                "currency": "USD",
+                "original_value": inv.get("original_value", inv["value"]),
+                "original_currency": inv.get("original_currency", "USD"),
+                "exchange_rate": inv.get("exchange_rate", 1.0),
+                "due_date": inv.get("due_date"),
+                "issue_date": inv.get("issue_date"),
+                "status": "OPEN"
+            }
+            for inv in combo
+        ]
+
+        audited_combos.append({
+            "invoice_ids": ids,
+            "invoice_values": values,
+            "number_of_invoices": len(combo),
+            "total": total_comb,
+            "currency": "USD",
+            "remaining": 0.0,
+            "score": round(1.0 / len(combo), 4),
+            "reasons": reasons,
+            "invoices_details": invoices_details,
+            "_overdue_count": overdue_count,
+            "_avg_delay": avg_delay,
+            "_max_val": max_val
+        })
+
+    # Sort based on ranking strategy
+    if ranking_strategy == "fewest_invoices":
+        audited_combos.sort(key=lambda c: (c["number_of_invoices"], -c["_overdue_count"]))
+    elif ranking_strategy == "overdue_first":
+        audited_combos.sort(key=lambda c: (-c["_overdue_count"], -c["_avg_delay"], c["number_of_invoices"]))
+    elif ranking_strategy == "highest_value_first":
+        audited_combos.sort(key=lambda c: (-c["_max_val"], c["number_of_invoices"]))
+    elif ranking_strategy == "oldest_first":
+        audited_combos.sort(key=lambda c: (-c["_avg_delay"], c["number_of_invoices"]))
+
+    # Final cleanup of internal sort keys and assign rank
+    for rank_idx, c in enumerate(audited_combos, 1):
+        c["rank"] = rank_idx
+        c.pop("_overdue_count", None)
+        c.pop("_avg_delay", None)
+        c.pop("_max_val", None)
+
+    return {
+        "status": "EXACT_MATCH" if audited_combos else "NO_EXACT_MATCH",
+        "customer_id": customer_id,
+        "amount": amount_usd,
+        "currency": "USD",
+        "receipt_date": receipt_date,
+        "exchange_rate": exchange_rate,
+        "combinations_count": len(audited_combos),
+        "combinations": audited_combos,
+        "solver_used": solver.__class__.__name__
+    }
 
 
 def suggest_invoice_payments(
