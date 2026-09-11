@@ -29,16 +29,19 @@ In corporate accounts receivable and financial reconciliation, one of the most c
 #### Core Objective:
 Given inputs:
 - `customer_id`: Unique customer identifier;
-- `amount`: Total received monetary amount;
-- `invoices`: List of open candidate invoices belonging to the customer;
+- `amount`: Total received monetary amount (standardized in USD);
+- `invoices`: List of open candidate invoices belonging to the customer (can be multi-currency, e.g. BRL, EUR, USD);
+- `receipt_date`: Date of payment receipt;
+- `exchange_rate`: Dollar quotation / exchange rate on the receipt date.
 
 The system must identify exact subsets of invoices whose face values sum **strictly and exactly** to the received amount:
 $$\\sum_{i \\in \\text{Subset}} \\text{value}_i = \\text{amount}$$
 
 #### Key Architectural Principles:
 1. **Deterministic Mathematical Correctness (Subset Sum Solver)**: To eliminate binary rounding errors, **all internal calculations are executed in integer cents (`int`)**. Neural networks or probabilistic heuristics are **never** used to evaluate financial equality.
-2. **Intelligent Preference Ranking (ML & Deep Learning)**: When multiple candidate combinations exist for the same amount, machine learning models and a **PyTorch MLP** evaluate customer historical preferences (e.g., clearing overdue invoices, highest face values, or oldest invoices first) to score and rank combinations.
-3. **Deterministic Fallback**: For new customers or cold-start scenarios, configurable business accounting rules perform safe, explainable ranking.
+2. **Multi-Currency Normalization to USD**: All invoice and settlement totals are standardized to **USD**, preserving the original currency, original value, and applied dollar exchange rate quotation for full auditability.
+3. **Intelligent Preference Ranking (ML & Deep Learning)**: When multiple candidate combinations exist for the same amount, machine learning models and a **PyTorch MLP** evaluate customer historical preferences (e.g., clearing overdue invoices, highest face values, or oldest invoices first) to score and rank combinations.
+4. **Deterministic Fallback**: For new customers or cold-start scenarios, configurable business accounting rules perform safe, explainable ranking.
 """))
 
     # Section 02
@@ -384,26 +387,43 @@ plt.show()
 
     # Section 15
     cells.append(nbf.v4.new_markdown_cell("""---
-### 15 - Invoice Payment Inference
+### 15 - Invoice Payment Inference & Multi-Currency Settlement
 
-Running the core pipeline function `suggest_invoice_payments()` which orchestrates input filtering, deterministic resolution, feature extraction, ML scoring, and final accounting verification.
+Running the core pipeline function `suggest_invoice_payments()` which orchestrates:
+1. Multi-currency invoice conversion to **USD** with dollar quotation (`exchange_rate`) and settlement receipt date (`receipt_date`);
+2. Integer cents subset sum mathematical resolution;
+3. 28-dimensional behavioral feature extraction;
+4. PyTorch MLP neural network scoring and deterministic ranking;
+5. Independent accounting integrity verification and multi-currency audit trail.
 """))
 
-    cells.append(nbf.v4.new_code_cell("""sample_invoices = [
-    {"id": 101, "customer_id": 41, "value": 2000.00, "due_date": "2026-01-10", "issue_date": "2025-12-01", "status": "OPEN"},
-    {"id": 102, "customer_id": 41, "value": 3500.00, "due_date": "2026-01-20", "issue_date": "2025-12-10", "status": "OPEN"},
-    {"id": 103, "customer_id": 41, "value": 4500.00, "due_date": "2026-04-10", "issue_date": "2026-02-01", "status": "OPEN"},
-    {"id": 104, "customer_id": 41, "value": 5000.00, "due_date": "2026-04-20", "issue_date": "2026-02-10", "status": "OPEN"},
-    {"id": 105, "customer_id": 41, "value": 5000.00, "due_date": "2026-04-25", "issue_date": "2026-02-15", "status": "OPEN"},
-    {"id": 106, "customer_id": 41, "value": 1500.00, "due_date": "2026-04-30", "issue_date": "2026-02-20", "status": "OPEN"},
+    cells.append(nbf.v4.new_code_cell("""# Candidate invoices in mixed currencies (USD and BRL)
+sample_invoices = [
+    # BRL invoices with dollar quotation 5.00:
+    # R$ 5,000.00 BRL / 5.00 = $1,000.00 USD
+    {"id": 101, "customer_id": 41, "value": 5000.00, "currency": "BRL", "due_date": "2026-01-10", "issue_date": "2025-12-01", "status": "OPEN"},
+    # R$ 10,000.00 BRL / 5.00 = $2,000.00 USD
+    {"id": 102, "customer_id": 41, "value": 10000.00, "currency": "BRL", "due_date": "2026-01-20", "issue_date": "2025-12-10", "status": "OPEN"},
+    # Native USD invoices:
+    {"id": 103, "customer_id": 41, "value": 4500.00, "currency": "USD", "due_date": "2026-04-10", "issue_date": "2026-02-01", "status": "OPEN"},
+    {"id": 104, "customer_id": 41, "value": 5000.00, "currency": "USD", "due_date": "2026-04-20", "issue_date": "2026-02-10", "status": "OPEN"},
+    {"id": 105, "customer_id": 41, "value": 5000.00, "currency": "USD", "due_date": "2026-04-25", "issue_date": "2026-02-15", "status": "OPEN"},
+    {"id": 106, "customer_id": 41, "value": 2000.00, "currency": "USD", "due_date": "2026-04-30", "issue_date": "2026-02-20", "status": "OPEN"},
 ]
+
+receipt_date = "2026-03-15"
+exchange_rate = 5.00  # 1 USD = 5.00 BRL
+received_amount_usd = 3000.00
 
 result = suggest_invoice_payments(
     customer_id=41,
-    amount=10000.00,
+    amount=received_amount_usd,
     invoices=sample_invoices,
     model=dl_ranking_model,
-    payment_history=payment_history
+    payment_history=payment_history,
+    currency="USD",
+    receipt_date=receipt_date,
+    exchange_rate=exchange_rate
 )
 
 import json
@@ -412,17 +432,26 @@ print(json.dumps(result, indent=2, ensure_ascii=False))
 
     # Section 16
     cells.append(nbf.v4.new_markdown_cell("""---
-### 16 - Ranking Valid Combinations & Explainability
+### 16 - Ranking Valid Combinations & Multi-Currency Audit
 
-Inspecting ranked suggestions and natural language explanations.
+Inspecting ranked suggestions, total amounts in USD, receipt metadata, and original currency invoice details.
 """))
 
-    cells.append(nbf.v4.new_code_cell("""print(f"Inference Status: {result['status']} | Customer: {result['customer_id']} | Amount: ${result['amount']:,.2f}\\n")
+    cells.append(nbf.v4.new_code_cell("""print(f"Inference Status: {result['status']}")
+print(f"Customer ID: {result['customer_id']}")
+print(f"Receipt Date: {result.get('receipt_date')} | Dollar Quotation (FX): {result.get('exchange_rate')}")
+print(f"Total Amount (USD): ${result['amount']:,.2f} {result['currency']}\\n")
 
 for comb in result["combinations"]:
     print(f"--- [RANK #{comb['rank']}] Score: {comb['score']:.4f} ---")
-    print(f"Selected Invoices: {comb['invoice_ids']} | Face Values: {comb['invoice_values']}")
-    print(f"Total: ${comb['total']:,.2f} | Remaining: ${comb['remaining']:,.2f} | Count: {comb['number_of_invoices']}")
+    print(f"Selected Invoices: {comb['invoice_ids']} | Face Values (USD): {comb['invoice_values']}")
+    print(f"Total: ${comb['total']:,.2f} {comb['currency']} | Remaining: ${comb['remaining']:,.2f} | Invoices Count: {comb['number_of_invoices']}")
+    
+    if "invoices_details" in comb:
+        print("Detailed Invoice Currency Breakdown:")
+        for inv in comb["invoices_details"]:
+            print(f"  • Inv #{inv['id']}: Original = {inv['original_value']:,.2f} {inv['original_currency']} (FX: {inv['exchange_rate']}) -> Converted = ${inv['value']:,.2f} USD")
+            
     print("Explainability Justifications:")
     for reason in comb.get("reasons", []):
         print(f"  • {reason}")
@@ -433,7 +462,7 @@ for comb in result["combinations"]:
     cells.append(nbf.v4.new_markdown_cell("""---
 ### 17 - Test Scenarios
 
-Interactive execution and validation of all 11 mandatory test scenarios.
+Interactive execution and validation of all 13 mandatory test scenarios, including multi-currency and USD normalization.
 """))
 
     cells.append(nbf.v4.new_code_cell("""from tests.test_scenarios import (
@@ -448,6 +477,8 @@ Interactive execution and validation of all 11 mandatory test scenarios.
     test_scenario_09_hundreds_of_invoices_performance,
     test_scenario_10_customer_with_sufficient_history,
     test_scenario_11_customer_cold_start_fallback,
+    test_scenario_12_multi_currency_brl_converted_to_usd_with_receipt_date_and_quotation,
+    test_scenario_13_mixed_currencies_matching_usd_target,
 )
 
 test_functions = [
@@ -462,6 +493,8 @@ test_functions = [
     ("Test 09: Performance with hundreds of invoices", test_scenario_09_hundreds_of_invoices_performance, False),
     ("Test 10: Customer with history (ML ranking)", test_scenario_10_customer_with_sufficient_history, True),
     ("Test 11: Cold start customer (Fallback ranking)", test_scenario_11_customer_cold_start_fallback, False),
+    ("Test 12: Multi-Currency BRL to USD with receipt date & FX quotation", test_scenario_12_multi_currency_brl_converted_to_usd_with_receipt_date_and_quotation, False),
+    ("Test 13: Mixed currencies (USD, BRL, EUR) matching USD target", test_scenario_13_mixed_currencies_matching_usd_target, False),
 ]
 
 test_results = []
@@ -527,10 +560,11 @@ plt.show()
 
 #### Production Engineering Guidelines:
 1. **Separation of Concerns**: Strict decoupling of deterministic subset solving and probabilistic ranking prevents accounting errors.
-2. **Hybrid Model Routing**:
+2. **Multi-Currency Normalization**: Ensure all open invoices and received settlements are normalized into USD integer cents with exact exchange rate logging before executing the combinatorial engine.
+3. **Hybrid Model Routing**:
    - For customers with **< 3 historical payments**: Route to *Deterministic Fallback Ranker*;
    - For customers with **>= 3 historical payments**: Route to *PyTorch MLP* with interaction features.
-3. **Scale**: For large books (> 50 invoices), configure the *Branch and Bound* solver with `MAX_COMBINATIONS=50` to guarantee sub-second latency (< 30ms).
+4. **Scale**: For large books (> 50 invoices), configure the *Branch and Bound* solver with `MAX_COMBINATIONS=50` to guarantee sub-second latency (< 30ms).
 """))
 
     # Section 20
@@ -539,9 +573,10 @@ plt.show()
 
 The **AI Invoice Payment Suggestion Model** project has been successfully built and validated:
 - Modular implementation of 4 deterministic Subset Sum solvers in integer cents;
-- Extraction of 24 structured features spanning combination, history, and preference alignment;
+- Multi-currency support with exact USD normalization, receipt date tracking, and dollar exchange rate quotations;
+- Extraction of 28 structured features spanning combination, history, and preference alignment;
 - Rigorous benchmark comparing classical ML against PyTorch MLP;
-- 100% test coverage across the 11 mandatory business scenarios;
+- 100% test coverage across all 13 mandatory business scenarios;
 - Full explainability, auditable fallback, and strict financial integrity.
 """))
 

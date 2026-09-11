@@ -6,7 +6,7 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.2%2B-EE4C2C.svg?logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![Scikit-Learn](https://img.shields.io/badge/scikit--learn-1.0%2B-F7931E.svg?logo=scikit-learn&logoColor=white)](https://scikit-learn.org/)
 [![Jupyter](https://img.shields.io/badge/Jupyter-Notebook-F37626.svg?logo=jupyter&logoColor=white)](https://jupyter.org/)
-[![Tests](https://img.shields.io/badge/pytest-11%20passed-brightgreen.svg?logo=pytest&logoColor=white)](https://docs.pytest.org/)
+[![Tests](https://img.shields.io/badge/pytest-13%20passed-brightgreen.svg?logo=pytest&logoColor=white)](https://docs.pytest.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 **Intelligent accounts receivable reconciliation and exact invoice settlement engine with deterministic mathematical correctness and adaptive ML/Deep Learning ranking.**
@@ -16,6 +16,7 @@
 
 [Overview](#-overview) •
 [Architecture & Dual Engines](#-architecture--the-two-stage-dual-engine-concept) •
+[Multi-Currency & USD Settlement](#-multi-currency-support--usd-settlement) •
 [Dataset Schemas & Fields](#-dataset-schemas--field-specifications) •
 [Mathematical Engine (`_math`)](#-how-to-run-the-mathematical-engine-_math) •
 [MLP Ranking Engine (`_mlp`)](#-how-to-run-the-deep-learning-mlp-engine-_mlp) •
@@ -39,6 +40,20 @@ In enterprise Accounts Receivable (A/R) reconciliation, corporate customers freq
 
 ---
 
+## 💱 Multi-Currency Support & USD Settlement
+
+The system natively supports multi-currency invoices (e.g., `BRL`, `EUR`, `USD`) and international settlements according to the following strict accounting rules:
+
+1. **Total Always in USD (`currency="USD"`)**:
+   - Every reconciliation target, output combination total, and suggested combination is strictly standardized and expressed in **USD**.
+2. **Multi-Currency Invoices Converted to USD**:
+   - Foreign currency invoices (e.g., `BRL` or `EUR`) are converted to USD at the relevant exchange rate (`exchange_rate` or quotation).
+   - Invoices maintain full traceability: each candidate invoice retains its `original_currency`, `original_value`, and applied `exchange_rate` alongside the converted `value` in USD.
+3. **Receipt Date & Dollar Quotation Tracking**:
+   - The received amount payload returns the **Settlement / Receipt Date** (`receipt_date` / `data_recebimento`) and the **Dollar Quotation** (`exchange_rate` / `cotacao`) applied on that date.
+
+---
+
 ## 🏛️ Architecture & The Two-Stage Dual Engine Concept
 
 The system operates as two distinct, decoupled engines that can be executed independently or as an integrated pipeline:
@@ -46,10 +61,10 @@ The system operates as two distinct, decoupled engines that can be executed inde
 ```mermaid
 flowchart TD
     subgraph Stage 1: Deterministic Mathematical Solver [_math]
-        A[Customer ID & Received Amount] --> B[Filter Invoices: Customer ID & Status OPEN]
-        C[Candidate Invoices List] --> B
-        B --> D[Filter Out Invoices > Received Amount]
-        D --> E[Convert Nominal Values to Integer Cents]
+        A[Customer ID, Receipt Date & FX Rate] --> B[Filter Invoices: Customer ID & Status OPEN]
+        C[Candidate Invoices: USD / BRL / EUR] --> B
+        B --> D[Convert Invoices to USD Cents using FX Rate]
+        D --> E[Filter Out Invoices > Received Amount]
         E --> F{Select Solver Strategy}
         F -->|N <= 12| G[Backtracking / Brute Force]
         F -->|12 < N <= 30| H[Backtracking + Suffix Sum Pruning]
@@ -67,7 +82,7 @@ flowchart TD
         O & P --> Q[Normalized Probability Scores]
         Q --> R[Sort Combinations by Score Descending]
         R --> S[Generate Natural Language Justifications]
-        S --> T[Return Status: EXACT_MATCH with Ranked Suggestions]
+        S --> T[Return Status: EXACT_MATCH with USD Totals & Multi-Currency Audit]
     end
 ```
 
@@ -78,6 +93,7 @@ flowchart TD
 | **Directory** | [`_math/`](./_math/) | [`_mlp/`](./_mlp/) |
 | **Primary Goal** | Find **ALL** invoice subsets where $\sum \text{values} == \text{amount}$. | Rank and recommend the **MOST PROBABLE** subset. |
 | **Mechanism** | Exact Subset Sum algorithms (Backtracking, Branch & Bound). | 28-feature extraction + PyTorch Neural Network (MLP). |
+| **Currency** | Standardized to **USD** integer cents (`int`). | Standardized in **USD** with full original currency audit. |
 | **Data Types** | Integer cents (`int`) to avoid floating-point errors. | Normalized float features $[0.0, 1.0]$. |
 | **ML Dependencies** | **None** (pure Python standard library). | PyTorch, Scikit-Learn, Pandas. |
 | **Execution Mode** | Can run completely standalone (`run_math_solver.py`). | Can extract features, train, and run standalone. |
@@ -97,7 +113,11 @@ Represents candidate open invoices available in the ERP system for settlement.
 | :--- | :--- | :---: | :--- | :--- |
 | `id` | `int` or `str` | **Yes** | Unique primary key of the invoice in the ERP. Used for tracking and subset output; **strictly excluded** from ML training features. | `1001` |
 | `customer_id` | `int` | **Yes** | Identifier of the customer. Used by the data loader to filter out foreign customer invoices before solving. | `41` |
-| `value` | `float` | **Yes** | Nominal face value in currency (e.g. BRL/USD). Converted to exact integer cents (`int(round(value * 100))`) for Subset Sum. | `2000.00` |
+| `value` | `float` | **Yes** | Value in USD (or nominal value in foreign currency converted to USD). Converted to exact integer cents (`int(round(value * 100))`) for Subset Sum. | `2000.00` |
+| `currency` | `str` | Optional | Currency code of the invoice (e.g., `"USD"`, `"BRL"`, `"EUR"`). Default is `"USD"`. | `"BRL"` |
+| `original_value` | `float` | Optional | Original face value in original currency before conversion. | `10000.00` |
+| `original_currency`| `str` | Optional | Original currency code before conversion. | `"BRL"` |
+| `exchange_rate` | `float` | Optional | Exchange rate / dollar quotation (e.g. `5.00` BRL per USD) used to convert to USD. | `5.00` |
 | `due_date` | `str` (ISO) | **Yes** | Due date (`YYYY-MM-DD`). Used to compute `days_overdue` and overdue delinquency ratios for ML features. | `"2026-01-10"` |
 | `issue_date` | `str` (ISO) | **Yes** | Issuance date (`YYYY-MM-DD`). Used to compute invoice age and seniority metrics for ML features. | `"2025-12-01"` |
 | `status` | `str` | Optional | Invoice status (e.g., `"OPEN"`, `"PAID"`, `"CANCELLED"`). Only `"OPEN"` invoices participate in reconciliation. | `"OPEN"` |
