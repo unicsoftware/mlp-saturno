@@ -1,0 +1,50 @@
+[
+  {
+    "id": 1001,
+    "customer_id": 41,
+    "value": 2000.00,
+    "due_date": "2026-01-10",
+    "issue_date": "2025-12-01",
+    "status": "OPEN"
+  },
+  {
+    "id": 1002,
+    "customer_id": 41,
+    "value": 3500.00,
+    "due_date": "2026-01-20",
+    "issue_date": "2025-12-10",
+    "status": "OPEN"
+  },
+  {
+    "id": 1003,
+    "customer_id": 41,
+    "value": 4500.00,
+    "due_date": "2026-04-10",
+    "issue_date": "2026-02-01",
+    "status": "OPEN"
+  },
+  {
+    "id": 1004,
+    "customer_id": 41,
+    "value": 5000.00,
+    "due_date": "2026-04-20",
+    "issue_date": "2026-02-10",
+    "status": "OPEN"
+  },
+  {
+    "id": 1005,
+    "customer_id": 41,
+    "value": 5000.00,
+    "due_date": "2026-04-25",
+    "issue_date": "2026-02-15",
+    "status": "OPEN"
+  },
+  {
+    "id": 1006,
+    "customer_id": 41,
+    "value": 1500.00,
+    "due_date": "2026-04-30",
+    "issue_date": "2026-02-20",
+    "status": "OPEN"
+  }
+]

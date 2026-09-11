@@ -1,0 +1,26 @@
+[
+  {
+    "id": 801,
+    "customer_id": 41,
+    "value": 4000.0,
+    "due_date": "2026-01-15",
+    "issue_date": "2025-12-01",
+    "status": "OPEN"
+  },
+  {
+    "id": 802,
+    "customer_id": 41,
+    "value": 6000.0,
+    "due_date": "2026-01-20",
+    "issue_date": "2025-12-10",
+    "status": "OPEN"
+  },
+  {
+    "id": 803,
+    "customer_id": 41,
+    "value": 10000.0,
+    "due_date": "2026-04-10",
+    "issue_date": "2026-02-01",
+    "status": "OPEN"
+  }
+]
