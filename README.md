@@ -32,7 +32,7 @@
 
 In enterprise Accounts Receivable (A/R) reconciliation, corporate customers frequently submit lump-sum bank payments to clear multiple open invoices. Determining **which exact combination of open invoices corresponds to the received amount (`amount`)** is a combinatorial optimization challenge with direct impact on cash application speed, credit limits, and accounting integrity.
 
-**MPL Saturno** solves this challenge through a strict, two-stage architectural separation:
+**MLP Saturno** solves this challenge through a strict, two-stage architectural separation:
 1. **Deterministic Mathematical Correctness (`_math/`)**: Exact Subset Sum solvers working strictly with integer arithmetic in **cents (`int`)**. Guarantees that no suggested combination violates accounting equality:
    $$\sum_{i \in \text{Subset}} \text{value}_i = \text{amount}$$
 2. **Machine Learning / Deep Learning Ranking (`_mlp/`)**: When multiple mathematically exact combinations exist (e.g., Combination A and Combination B both sum to exactly $10,000.00), a **PyTorch Multi-Layer Perceptron (MLP)** neural network scores each combination based on customer historical payment preferences (e.g., clearing overdue invoices first, clearing highest face values, or clearing oldest invoices) and outputs ranked suggestions with natural language explanations.
